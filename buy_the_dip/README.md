@@ -52,12 +52,62 @@ python walk_forward.py
 python main.py --scan
 ```
 
+### Setup Environment (First Time)
+```bash
+# From predictor-engine root
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### Activate Existing Environment
+```bash
+# From predictor-engine root
+source venv/bin/activate
+```
+
+### Export Data for Frontend
+```bash
+# From predictor-engine root
+python buy_the_dip/export_frontend_data.py \
+  --include-walkforward \
+  --out-dir exports/buy_the_dip
+```
+
+Generates fixed artifacts:
+- `exports/buy_the_dip/backtest.latest.json`
+- `exports/buy_the_dip/signals.latest.json`
+- `exports/buy_the_dip/walkforward.latest.json` (optional if `--include-walkforward`)
+
+If you only want backtest + signals:
+```bash
+python buy_the_dip/export_frontend_data.py --out-dir exports/buy_the_dip
+```
+
 ## Key Parameters
 
 - `DIP_THRESHOLD_STRONG = -0.07` (7% drop required)
 - `TAKE_PROFIT_PCT = 0.04` (4% take profit)
 - `HOLD_TIMEOUT_HOURS = 24` (exit after 24h)
 - `POSITION_PCT = 0.20` (20% per trade)
+
+## Per-Symbol TP Override
+
+You can now set `take_profit_pct` inside `SYMBOL_SIGNAL_OVERRIDES` in `config.py`:
+
+```python
+"XRP/USDT": {
+    "dip_threshold": -0.055,
+    "use_rsi_filter": False,
+    "use_volume_filter": True,
+    "hold_timeout_hours": 27,
+    "max_positions": 4,
+    "take_profit_pct": 0.045,
+},
+```
+
+If `take_profit_pct` is omitted, the strategy uses global `TAKE_PROFIT_PCT`.
 
 ## Walk-Forward Results (BNB)
 

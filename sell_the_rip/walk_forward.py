@@ -49,7 +49,8 @@ def walk_forward_validation(
         "  Filters: "
         f"RSI={'on' if signal_params['use_rsi_filter'] else 'off'} "
         f"VOL={'on' if signal_params['use_volume_filter'] else 'off'} "
-        f"TREND={'on' if signal_params['use_trend_filter'] else 'off'}"
+        f"TREND={'on' if signal_params['use_trend_filter'] else 'off'} "
+        f"CT={'on' if signal_params.get('allow_countertrend_reversal', False) else 'off'}"
     )
     print(
         "  Risk: "
@@ -96,6 +97,10 @@ def walk_forward_validation(
                 use_volume_filter=signal_params["use_volume_filter"],
                 use_rsi_filter=signal_params["use_rsi_filter"],
                 use_trend_filter=signal_params["use_trend_filter"],
+                allow_countertrend_reversal=bool(signal_params.get("allow_countertrend_reversal", False)),
+                countertrend_rip_lookback_hours=int(signal_params.get("countertrend_rip_lookback_hours", 8)),
+                countertrend_min_drop_1h=float(signal_params.get("countertrend_min_drop_1h", 0.01)),
+                countertrend_min_pullback_pct=float(signal_params.get("countertrend_min_pullback_pct", 0.012)),
                 min_volume_mult=signal_params["min_volume_mult"],
                 rsi_min=signal_params["rsi_min"],
                 rsi_max=signal_params["rsi_max"],

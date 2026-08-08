@@ -7,6 +7,7 @@ import json
 
 # Data
 TIMEFRAME = "1h"
+# DAYS = 365
 DAYS = 1825
 
 # Universe (same as downtrend_breakout)
@@ -51,6 +52,12 @@ USE_TREND_FILTER = True
 EMA_TREND_LEN = 200
 EMA_SLOPE_HOURS = 24
 
+# Countertrend reversal entry (captures pump->rejection even if EMA200 trend is not bearish)
+ALLOW_COUNTERTREND_REVERSAL = False
+COUNTERTREND_RIP_LOOKBACK_HOURS = 8
+COUNTERTREND_MIN_DROP_1H = 0.01
+COUNTERTREND_MIN_PULLBACK_PCT = 0.012
+
 # Per-symbol defaults (matrix can refine)
 DEFAULT_RIP_THRESHOLD = RIP_THRESHOLD_STRONG if USE_STRONG_THRESHOLD else RIP_THRESHOLD_PCT
 
@@ -59,6 +66,10 @@ BASE_SYMBOL_PARAMS = {
     "use_volume_filter": USE_VOLUME_FILTER,
     "use_rsi_filter": USE_RSI_FILTER,
     "use_trend_filter": USE_TREND_FILTER,
+    "allow_countertrend_reversal": ALLOW_COUNTERTREND_REVERSAL,
+    "countertrend_rip_lookback_hours": COUNTERTREND_RIP_LOOKBACK_HOURS,
+    "countertrend_min_drop_1h": COUNTERTREND_MIN_DROP_1H,
+    "countertrend_min_pullback_pct": COUNTERTREND_MIN_PULLBACK_PCT,
     "min_volume_mult": MIN_VOLUME_MULT,
     "rsi_min": RSI_MIN,
     "rsi_max": RSI_MAX,

@@ -75,22 +75,52 @@ def _build_signal_payload(df: pd.DataFrame, symbol: str) -> dict | None:
 def _evaluate_filters(last: pd.Series, params: dict) -> tuple[list[tuple[str, bool, str]], str]:
     checks: list[tuple[str, bool, str]] = []
     rip_threshold = float(params["rip_threshold"])
+    use_trend_filter = bool(params["use_trend_filter"])
+    allow_countertrend_reversal = bool(params.get("allow_countertrend_reversal", False))
+    countertrend_min_drop_1h = float(params.get("countertrend_min_drop_1h", 0.01))
+    countertrend_min_pullback_pct = float(params.get("countertrend_min_pullback_pct", 0.012))
 
     past_ret = last.get("past_return", float("nan"))
+    past_ret_recent_max = last.get("past_return_recent_max", float("nan"))
+    ret_1h = last.get("ret_1h", float("nan"))
+    pullback = last.get("pullback_from_recent_high", float("nan"))
     rel_vol = last.get("relative_volume", float("nan"))
     rsi = last.get("rsi_14", float("nan"))
     trend_bearish = bool(last.get("trend_bearish", False))
 
-    rip_ok = pd.notna(past_ret) and float(past_ret) > rip_threshold
+    rip_now = pd.notna(past_ret) and float(past_ret) > rip_threshold
+    rip_recent = pd.notna(past_ret_recent_max) and float(past_ret_recent_max) > rip_threshold
+    reversal_ok = (
+        pd.notna(ret_1h)
+        and pd.notna(pullback)
+        and float(ret_1h) <= -countertrend_min_drop_1h
+        and float(pullback) <= -countertrend_min_pullback_pct
+    )
+
+    trend_path_ok = rip_now
+    countertrend_path_ok = (
+        use_trend_filter
+        and (not trend_bearish)
+        and allow_countertrend_reversal
+        and rip_recent
+        and reversal_ok
+    )
+    if use_trend_filter:
+        entry_ok = trend_path_ok if trend_bearish else countertrend_path_ok
+    else:
+        entry_ok = trend_path_ok
+
     checks.append(
         (
-            "rip_threshold",
-            bool(rip_ok),
-            (
-                f"past_return={float(past_ret)*100:+.2f}% > th={rip_threshold*100:.2f}%"
-                if pd.notna(past_ret)
-                else "past_return=NaN"
-            ),
+            "entry_gate",
+            bool(entry_ok),
+            f"trend_bearish={trend_bearish}, "
+            f"rip_now={(float(past_ret)*100):+.2f}%>{rip_threshold*100:.2f}%, "
+            f"rip_recent={(float(past_ret_recent_max)*100):+.2f}%>{rip_threshold*100:.2f}%, "
+            f"ret_1h={(float(ret_1h)*100):+.2f}%<=-{countertrend_min_drop_1h*100:.2f}%, "
+            f"pullback={(float(pullback)*100):+.2f}%<=-{countertrend_min_pullback_pct*100:.2f}%"
+            if pd.notna(past_ret) and pd.notna(past_ret_recent_max) and pd.notna(ret_1h) and pd.notna(pullback)
+            else "missing rip/reversal fields",
         )
     )
 
@@ -129,8 +159,14 @@ def _evaluate_filters(last: pd.Series, params: dict) -> tuple[list[tuple[str, bo
     else:
         checks.append(("rsi_filter", True, "disabled"))
 
-    if params["use_trend_filter"]:
-        checks.append(("trend_filter", bool(trend_bearish), f"trend_bearish={trend_bearish}"))
+    if use_trend_filter:
+        checks.append(
+            (
+                "trend_policy",
+                bool(trend_bearish or allow_countertrend_reversal),
+                f"trend_bearish={trend_bearish}, allow_countertrend_reversal={allow_countertrend_reversal}",
+            )
+        )
     else:
         checks.append(("trend_filter", True, "disabled"))
 
@@ -195,6 +231,13 @@ def main_scan(
     print(f"  Position pct:  {POSITION_PCT*100:.1f}%")
     print(f"  Max positions: {MAX_POSITIONS}")
     print(f"  Fees:          {FEE_PCT:.2%} per side")
+    print(
+        "  Countertrend: "
+        f"{'on' if bool(sample_params.get('allow_countertrend_reversal', False)) else 'off'} "
+        f"(lookback={int(sample_params.get('countertrend_rip_lookback_hours', 8))}h, "
+        f"drop1h>={float(sample_params.get('countertrend_min_drop_1h', 0.01))*100:.1f}%, "
+        f"pullback>={float(sample_params.get('countertrend_min_pullback_pct', 0.012))*100:.1f}%)"
+    )
     print("=" * 70)
 
     print("\n[1/3] Processing symbols...")
@@ -215,6 +258,10 @@ def main_scan(
                 use_volume_filter=bool(signal_params["use_volume_filter"]),
                 use_rsi_filter=bool(signal_params["use_rsi_filter"]),
                 use_trend_filter=bool(signal_params["use_trend_filter"]),
+                allow_countertrend_reversal=bool(signal_params.get("allow_countertrend_reversal", False)),
+                countertrend_rip_lookback_hours=int(signal_params.get("countertrend_rip_lookback_hours", 8)),
+                countertrend_min_drop_1h=float(signal_params.get("countertrend_min_drop_1h", 0.01)),
+                countertrend_min_pullback_pct=float(signal_params.get("countertrend_min_pullback_pct", 0.012)),
                 min_volume_mult=float(signal_params["min_volume_mult"]),
                 rsi_min=float(signal_params["rsi_min"]),
                 rsi_max=float(signal_params["rsi_max"]),
@@ -228,6 +275,7 @@ def main_scan(
                 f"RSI={'on' if signal_params['use_rsi_filter'] else 'off'} "
                 f"VOL={'on' if signal_params['use_volume_filter'] else 'off'} "
                 f"TREND={'on' if signal_params['use_trend_filter'] else 'off'} "
+                f"CT={'on' if signal_params.get('allow_countertrend_reversal', False) else 'off'} "
                 f"TP={float(signal_params['take_profit_pct'])*100:.1f}% "
                 f"SL={float(signal_params['stop_loss_pct'])*100:.1f}% "
                 f"HOLD={int(signal_params['hold_timeout_hours'])}h "

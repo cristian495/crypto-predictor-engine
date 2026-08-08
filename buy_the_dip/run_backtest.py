@@ -73,7 +73,17 @@ def backtest_symbol(
         print(
             "  Filters: "
             f"RSI={'on' if signal_params['use_rsi_filter'] else 'off'} "
-            f"VOL={'on' if signal_params['use_volume_filter'] else 'off'}"
+            f"VOL={'on' if signal_params['use_volume_filter'] else 'off'} "
+            f"TP={signal_params['take_profit_pct']*100:.1f}% "
+            f"SL={signal_params['stop_loss_pct']*100:.1f}% "
+            f"HLD={signal_params['hold_timeout_hours']}h "
+            f"MAXP={signal_params['max_positions']} "
+            f"RVmin={signal_params['min_volume_mult']:.2f} "
+            f"RSI=[{signal_params['rsi_min']:.0f},{signal_params['rsi_max']:.0f}] "
+            f"OED={'on' if signal_params['one_entry_per_dip_event'] else 'off'} "
+            f"RST={signal_params['dip_event_reset_pct']*100:.1f}% "
+            f"FF={signal_params['fail_fast_bars'] if signal_params['fail_fast_bars'] is not None else '-'} "
+            f"FFmin={signal_params['fail_fast_min_rebound_pct']*100:.1f}%"
         )
 
     df = generate_signals(
@@ -81,6 +91,11 @@ def backtest_symbol(
         dip_threshold=threshold,
         use_volume_filter=signal_params["use_volume_filter"],
         use_rsi_filter=signal_params["use_rsi_filter"],
+        min_volume_mult=signal_params["min_volume_mult"],
+        rsi_min=signal_params["rsi_min"],
+        rsi_max=signal_params["rsi_max"],
+        one_entry_per_dip_event=signal_params["one_entry_per_dip_event"],
+        dip_event_reset_pct=signal_params["dip_event_reset_pct"],
     )
 
     # Count signals
@@ -97,9 +112,13 @@ def backtest_symbol(
     results = run_backtest(
         df,
         initial_capital=INITIAL_CAPITAL,
-        stop_loss_pct=STOP_LOSS_PCT,
-        take_profit_pct=TAKE_PROFIT_PCT,
+        stop_loss_pct=signal_params["stop_loss_pct"],
+        take_profit_pct=signal_params["take_profit_pct"],
+        hold_timeout=signal_params["hold_timeout_hours"],
+        max_positions=signal_params["max_positions"],
         fee_pct=FEE_PCT,
+        fail_fast_bars=signal_params["fail_fast_bars"],
+        fail_fast_min_rebound_pct=signal_params["fail_fast_min_rebound_pct"],
     )
 
     # 5. Print results
@@ -138,7 +157,7 @@ def backtest_all_symbols(
         print(f"  Threshold: {dip_threshold*100:.1f}% (global override)")
     else:
         print(f"  Threshold: per-symbol override")
-    print(f"  SL/TP:     {STOP_LOSS_PCT*100:.1f}% / {TAKE_PROFIT_PCT*100:.1f}%")
+    print(f"  SL/TP:     per-symbol overrides (default SL {STOP_LOSS_PCT*100:.1f}% / TP {TAKE_PROFIT_PCT*100:.1f}%)")
     print(f"{'='*60}")
 
     all_results = {}
@@ -146,7 +165,7 @@ def backtest_all_symbols(
     for symbol in symbols:
         try:
             results = backtest_symbol(
-                symbol, days=days, dip_threshold=threshold, verbose=True
+                symbol, days=days, dip_threshold=dip_threshold, verbose=True
             )
             all_results[symbol] = results
         except Exception as e:

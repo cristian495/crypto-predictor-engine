@@ -19,6 +19,8 @@ from config import (
     MAX_POSITIONS,
     FEE_PCT,
     INITIAL_CAPITAL,
+    FAIL_FAST_BARS,
+    FAIL_FAST_MIN_REBOUND_PCT,
 )
 from strategy import generate_signals, add_dip_features, compute_exit_levels
 
@@ -86,6 +88,8 @@ def run_backtest(
     position_pct: float = POSITION_PCT,
     max_positions: int = MAX_POSITIONS,
     fee_pct: float = FEE_PCT,
+    fail_fast_bars: int | None = FAIL_FAST_BARS,
+    fail_fast_min_rebound_pct: float = FAIL_FAST_MIN_REBOUND_PCT,
 ) -> dict:
     """
     Run backtest on DataFrame with signals.
@@ -99,6 +103,8 @@ def run_backtest(
         position_pct: Fraction of capital per trade
         max_positions: Max simultaneous positions
         fee_pct: Fee per side
+        fail_fast_bars: Early-exit bars threshold (None to disable)
+        fail_fast_min_rebound_pct: Minimum rebound required by fail-fast
 
     Returns:
         dict with trades, equity_curve, metrics
@@ -120,6 +126,10 @@ def run_backtest(
         for j, pos in enumerate(positions):
             pos["bars_held"] += 1
 
+            max_rebound_pct = (current_high - pos["entry_price"]) / pos["entry_price"]
+            if max_rebound_pct > pos.get("max_rebound_pct", 0):
+                pos["max_rebound_pct"] = max_rebound_pct
+
             # Check stop loss
             if current_low <= pos["stop_loss"]:
                 exit_price = pos["stop_loss"]
@@ -128,6 +138,15 @@ def run_backtest(
             elif current_high >= pos["take_profit"]:
                 exit_price = pos["take_profit"]
                 exit_reason = "take_profit"
+            # Check fail-fast
+            elif (
+                fail_fast_bars is not None
+                and int(fail_fast_bars) > 0
+                and pos["bars_held"] >= int(fail_fast_bars)
+                and pos.get("max_rebound_pct", 0) < fail_fast_min_rebound_pct
+            ):
+                exit_price = current_close
+                exit_reason = "fail_fast"
             # Check timeout
             elif pos["bars_held"] >= hold_timeout:
                 exit_price = current_close
@@ -153,6 +172,7 @@ def run_backtest(
                 "exit_reason": exit_reason,
                 "duration_bars": pos["bars_held"],
                 "dip_size": pos.get("dip_size", 0),
+                "max_rebound_pct": round(pos.get("max_rebound_pct", 0), 6),
             })
 
             positions_to_close.append(j)
@@ -188,6 +208,7 @@ def run_backtest(
                     "stop_loss": levels["stop_loss"],
                     "take_profit": levels["take_profit"],
                     "dip_size": row.get("dip_size", 0),
+                    "max_rebound_pct": 0.0,
                 })
 
         # ── 3. Compute equity ──
@@ -217,6 +238,7 @@ def run_backtest(
             "exit_reason": "end_of_data",
             "duration_bars": pos["bars_held"],
             "dip_size": pos.get("dip_size", 0),
+            "max_rebound_pct": round(pos.get("max_rebound_pct", 0), 6),
         })
 
     # ── Build results ──

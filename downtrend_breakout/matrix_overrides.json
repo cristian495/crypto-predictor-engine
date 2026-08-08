@@ -15,13 +15,13 @@
     "use_btc_regime_switch": true
   },
   "BNB/USDT": {
-    "adx_min": 22.0,
+    "adx_min": 20.0,
     "btc_ret7d_max": -0.01,
-    "donchian_window": 96,
+    "donchian_window": 72,
     "enable_sell_the_rip": false,
     "min_probability": 0.65,
     "short_ret24_threshold": -0.03,
-    "short_ret6_threshold": -0.015,
+    "short_ret6_threshold": -0.01,
     "stop_loss_atr_mult": 2.2,
     "trail_activation_r": 1.2,
     "trail_atr_mult": 0.8
@@ -49,18 +49,18 @@
     "trail_atr_mult": 0.8
   },
   "SOL/USDT": {
-    "adx_min": 20.0,
+    "adx_min": 22.0,
     "btc_ret24_max": 0.0,
     "btc_ret7d_max": -0.01,
     "donchian_window": 72,
     "enable_sell_the_rip": true,
     "min_probability": 0.55,
     "short_ret24_threshold": -0.06,
-    "short_ret6_threshold": -0.025,
+    "short_ret6_threshold": -0.03,
     "stop_loss_atr_mult": 1.8,
     "trail_activation_r": 1.2,
     "trail_atr_mult": 0.8,
-    "use_btc_bear_filter": true,
+    "use_btc_bear_filter": false,
     "use_btc_regime_switch": false
   },
   "SUI/USDT": {
