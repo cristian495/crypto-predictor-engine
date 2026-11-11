@@ -42,3 +42,12 @@ Thumbs.db
 # Secrets & Config
 monitor_config.json
 .env
+.env.local
+
+# Live paper-trading runtime data (not versioned, any location)
+live_signals.jsonl
+live_results.jsonl
+live_summary.json
+**/live_signals.jsonl
+**/live_results.jsonl
+**/live_summary.json

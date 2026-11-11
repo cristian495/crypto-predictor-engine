@@ -264,6 +264,7 @@ def main_scan(
                 fee_pct=FEE_PCT,
                 fail_fast_bars=signal_params["fail_fast_bars"],
                 fail_fast_min_rebound_pct=signal_params["fail_fast_min_rebound_pct"],
+                leverage=signal_params.get("leverage"),
             )
 
             m = bt["metrics"]

@@ -21,14 +21,41 @@ DAYS = 365  # 1 years of data
 # DAYS = 1825  # 5 years of data
 
 # VALIDATED symbols (passed walk-forward)
+#
+# Revisión 2026-08-10: screening de los 70 pares USDT spot de mayor volumen en Binance
+# con parámetros GLOBALES (sin tuning por moneda), 5 años, exigiendo que las dos mitades
+# temporales fueran rentables. 31 tenían historia suficiente; 6 pasaron. Sobre esos se
+# corrió un backtest de cartera con capital compartido (los scripts por símbolo usan
+# capital dedicado y no capturan el solapamiento de dips entre monedas).
 DEFAULT_SYMBOLS = [
-    # Excelentes
-    # "SUI/USDT",    # Stability 73.zz6/100 - EXCELLENT
+    # Añadidos 2026-08-10 — screening en 2 mitades disjuntas + walk_forward.py --days 1825
+    "ICP/USDT",    # WF 63.0 GOOD, consistencia 17/27. Params GLOBALES a propósito (ver abajo).
+                   #   El más rentable de la cesta pero el menos estable: vigilar.
+    "XLM/USDT",    # WF 76.3 EXCELLENT, consistencia 23/27. Override optimizado abajo.
+    "SUI/USDT",    # WF 68.8 GOOD, consistencia 11/16. Solo 3.3 años de historia.
+                   #   OJO: últimos 365d en NEGATIVO (-7.05%, PF 0.86). Verificado 2026-08-10
+                   #   que NO es problema de parámetros: th-7/RSIon, th-7/RSIoff y th-8/RSIon
+                   #   dan -7.1%, -6.1% y -5.6%. Es régimen del símbolo. A 5 años PF ~1.45 con
+                   #   las tres. No re-tunear para arreglar el último año: eso es curve-fitting.
+
+    # Incumbentes, revalidados en la misma corrida
+    "XRP/USDT",    # WF 76.5 EXCELLENT, consistencia 22/26.
+    # Media de la cesta: WF 71.0 EXCELLENT, Sharpe 1.46, PF 6.18, MaxDD -4.50%
+
+    # Retirado 2026-11-10: en backtest de CARTERA (capital compartido, x3, 365d) BNB
+    # dio -61.5% de PnL con WR 0% (solo 2 trades tomados, ambos perdedores). Aislado
+    # tambien perdia neto tras costes de futuros (-9.9%, PF 0.74). Probadas 7 configs
+    # (th/tp/sl/hold/rsi): ninguna lo vuelve rentable de forma fiable; las positivas
+    # eran ruido (4 trades/año) o breakeven. Su edge de buy-the-dip es genuinamente debil.
+    # "BNB/USDT",    # WF 70.5 EXCELLENT, consistencia 17/22. Aporta MUY poco PnL con th=-7%.
+
+    # Retirado 2026-08-10: en backtest de cartera (capital compartido, ventana común
+    # 2023-05 -> 2026-08) INJ resta incluso con sus params tuneados. Quitarlo de la cesta
+    # BNB+XRP+INJ sube Sharpe 0.83 -> 1.06 y baja DD -16.5% -> -11.7%, con MÁS retorno.
+    # En la cesta de 6 el efecto se repite (Sharpe 1.03 -> 1.12). Su override sigue abajo.
+    # "INJ/USDT",    # Stability 60/100 - GOOD
     # "UNI/USDT",    # Stability 73.zz6/100 - EXCELLENT
-    # "BNB/USDT",    # Stability 73.zz6/100 - EXCELLENT
     # "ADA/USDT",    # Stability 63.8/100 - GOOD
-    "XRP/USDT",    # Stability 56.4/100 - GOOD
-    "INJ/USDT",    # Stability 60/100 - GOOD
     # "AGLD/USDT",    # Stability 60/100 - GOOD
     # "DASH/USDT",    # Stability 60/100 - GOOD
 
@@ -75,9 +102,34 @@ HOLD_TIMEOUT_HOURS = 24         # Exit after 24h regardless (optimal timing)
 
 # ── Position Sizing ─────────────────────────────────────────
 POSITION_PCT = 0.20             # 20% of capital per trade (higher conviction)
-MAX_POSITIONS = 2               # Max simultaneous positions
+# MAX_POSITIONS: óptimo de CARTERA elegido 2026-11-10 (cesta sin BNB, x3, 365d).
+# Barrido 2→8: con 4 el Sharpe de cartera es máximo (0.98) y el ratio Return/DD
+# también (1.22, +50.1% ret / -41.0% DD). Subir a 5 añade más DD que retorno; de 6
+# en adelante todo empeora. Con 2 se perdían ~690 señales por falta de slots.
+MAX_POSITIONS = 4               # Max simultaneous positions (óptimo de cartera)
 INITIAL_CAPITAL = 10_000.0
-FEE_PCT = 0.001                 # 0.1% per side
+
+# ── Futures Realism (Binance USDⓈ-M) ────────────────────────
+# El edge es pequeño (TP 3-4%), asi que los costes reales de futuros
+# deciden si un simbolo es rentable NETO. El backtest antiguo usaba fee
+# spot 0.1% y nada de slippage/funding/liquidacion -> inflaba el retorno.
+FEE_PCT = 0.0004                # 0.04% taker por lado (Binance futures), NO 0.1% spot
+
+# Slippage: entras justo tras una caida del 7% (peor liquidez). Conservador fijo.
+SLIPPAGE_PCT = 0.0005           # 0.05% por lado, aplicado en entrada y salida
+
+# Funding: en perpetuos se paga/cobra cada 8h. LONG-only paga cuando el
+# funding es positivo (mercado alcista) y cobra cuando es negativo (tras caidas).
+# Se descuenta con datos REALES de Binance si estan disponibles.
+USE_FUNDING = True              # Descontar funding real durante la posicion
+FUNDING_INTERVAL_HOURS = 8      # Binance liquida funding cada 8h
+FUNDING_RATE_FALLBACK = 0.0001  # 0.01%/8h si no hay datos reales (conservador)
+
+# Apalancamiento: con x2-x3 un -20% de precio NO liquida (margen aguanta),
+# pero se modela para alertar si el SL configurado cae por debajo de liquidacion.
+LEVERAGE = 3                    # Apalancamiento por defecto (override por simbolo)
+# Margen de mantenimiento aprox. Binance para notional bajo (~0.5%). Conservador.
+MAINTENANCE_MARGIN_RATE = 0.005
 
 # ── Filters (optional, can disable) ─────────────────────────
 # Volume filter - ensure there's liquidity
@@ -119,11 +171,73 @@ LONG_ONLY = True                # Buy the dip = LONG only
 # - dip_event_reset_pct (float)
 # - fail_fast_bars (int)
 # - fail_fast_min_rebound_pct (float)
+# - leverage (int|float)   # apalancamiento del simbolo; default global LEVERAGE
 DEFAULT_DIP_THRESHOLD = DIP_THRESHOLD_STRONG if USE_STRONG_THRESHOLD else DIP_THRESHOLD_PCT
 
 SYMBOL_SIGNAL_OVERRIDES = {
+    # ── XLM/USDT ── optimize_symbol.py 2026-08-10, 1825 days, OOS = 30% más reciente.
+    # Único de los tres candidatos nuevos cuya optimización sobrevivió fuera de muestra:
+    #   IS  (238 trades): 64.37%  PF 1.80  Sharpe 1.23
+    #   OOS ( 97 trades): 25.01%  PF 2.34  Sharpe 1.46  WR 71.1%  DD -5.29%
+    #   retención PF IS->OOS: 1.30  (el PF MEJORA fuera de muestra)
+    # Los 15 finalistas convergen al mismo núcleo con retención >= 0.98 => es meseta, no pico.
+    # El óptimo caía en el borde del grid en 4 ejes, así que se extendió cada uno por separado:
+    #   take_profit_pct  meseta plana 0.06-0.15 (OOS ret 23.9-25.5%) -> 0.08 queda dentro
+    #   stop_loss_pct    pico interior real: 0.17->2.11  0.20->2.34  0.25->2.23
+    #   rsi_max          saturado: 70/80/85/100 dan resultados IDÉNTICOS, el límite no ata
+    #   min_volume_mult  subir solo encoge la muestra (2.5 deja 46 trades OOS) -> 1.2
+    "XLM/USDT": {
+        "dip_threshold": -0.06,
+        "use_rsi_filter": True,
+        "use_volume_filter": True,
+        "hold_timeout_hours": 24,
+        "max_positions": 2,
+        "take_profit_pct": 0.08,
+        "stop_loss_pct": 0.20,
+        "min_volume_mult": 1.2,
+        "rsi_min": 10,
+        "rsi_max": 70,
+        "one_entry_per_dip_event": False,
+        "dip_event_reset_pct": -0.04,
+        "fail_fast_bars": None,
+        "fail_fast_min_rebound_pct": 0.01,
+    },
+
+    # ── ICP/USDT ── SIN override a propósito: usa los parámetros globales.
+    # optimize_symbol.py 2026-08-10 produjo th=-10% TP=6% SL=14% hold=12h, pero los 15
+    # finalistas tenían retención PF IS->OOS de 0.55-0.60 y retorno OOS de solo +1.34%
+    # (Sharpe 0.14, WR 51.2%, 3/6 sub-periodos positivos). Curve-fitting.
+    # Comparado en el MISMO periodo fuera de muestra, los globales ganan:
+    #   config "optimizada": PF OOS 1.18, +1.3%
+    #   globales:            PF 1.25 en H2 completo, +16.8%
+    # No pegar aquí el bloque RECOMMENDED sin mirar antes la retención IS->OOS.
+
+    # ── SUI/USDT ── se mantiene el override previo. La optimización de 2026-08-10 fue
+    # descartada: los 15 finalistas daban retorno OOS NEGATIVO (-3.7% a -11.8%),
+    # retención 0.30-0.51 y 0-2 de 6 sub-periodos positivos. Ni un candidato salvable.
     "SUI/USDT": {"dip_threshold": -0.07, "use_rsi_filter": True, "use_volume_filter": False},
-    "BNB/USDT": {"dip_threshold": -0.05, "use_rsi_filter": False, "use_volume_filter": True},
+    # "BNB/USDT": {"dip_threshold": -0.05, "use_rsi_filter": False, "use_volume_filter": True},
+    # 1825 days (medido 2026-08, hereda TP 4% / SL 20% / hold 24h / maxpos 2 globales)
+    #   IS PF 1.43  |  OOS PF 1.40  |  WF stability 63.0  |  FULL 37.29%  PF 1.42  405 trades
+
+    "BNB/USDT": {
+        "dip_threshold": -0.07,
+        "use_rsi_filter": False,
+        "use_volume_filter": True,
+        "hold_timeout_hours": 28,
+        "max_positions": 4,
+        "take_profit_pct": 0.03,
+        "stop_loss_pct": 0.20,
+        "min_volume_mult": 0.5,
+    },
+    # 1825 days - refine_symbol.py (1944 configs evaluadas)
+    # Split IS 2021-08→2025-02 / OOS 2025-02→2026-08 (OOS oculto durante la busqueda)
+    #   IS PF 1.75  |  OOS PF 1.78  |  WF stability 73.2 / 26 ventanas
+    #   FULL 46.63%  PF 1.75  WR 77.1%  DD -12.8%  354 trades
+    # OJO: el OOS de BNB fue lateral (+2.8%), no un desplome como INJ/XRP.
+    # Evidencia mas debil que en esos dos: peso mas el WF stability que el OOS.
+    # max_positions=4 es critico: casi todas las vecinas con maxpos=2 fallan la puerta.
+    # RSI filter OFF gana aqui, al reves que en INJ y XRP. mvm 0.6 no mejora (si en XRP).
     
     "DOGE/USDT": {"dip_threshold": -0.05, "use_rsi_filter": True, "use_volume_filter": True},
     "ADA/USDT": {"dip_threshold": -0.06, "use_rsi_filter": False, "use_volume_filter": True},
@@ -218,8 +332,26 @@ SYMBOL_SIGNAL_OVERRIDES = {
     #   XRP/USDT          1.70%     1.14    67.6%     5.82       29    -7.58% 72.6 (EXCELLENT)      19/27 (70.4%)
 
 
+    # "XRP/USDT": {
+    #     "dip_threshold": -0.055,
+    #     "use_rsi_filter": True,
+    #     "use_volume_filter": True,
+    #     "hold_timeout_hours": 28,
+    #     "max_positions": 4,
+    #     "take_profit_pct": 0.04,
+    #     "stop_loss_pct": 0.20,
+    #     "min_volume_mult": 0.60,
+    #     "rsi_min": 25,
+    #     "rsi_max": 60
+    # },
+    # 365 days
+    #   XRP/USDT         25.32%     1.98    66.4%     2.58      110
+    #   XRP/USDT          2.46%     1.36    53.2%     1.74       18    -3.50%      66.7 (GOOD)        2/3 (66.7%)
+    # 1825 days (medido 2026-08, ventana 2021-08 -> 2026-08)
+    #   IS PF 1.22  |  OOS PF 2.05  |  WF stability 63.8  |  FULL 55.36%  PF 1.35  678 trades
+
     "XRP/USDT": {
-        "dip_threshold": -0.055,
+        "dip_threshold": -0.07,
         "use_rsi_filter": True,
         "use_volume_filter": True,
         "hold_timeout_hours": 28,
@@ -230,12 +362,13 @@ SYMBOL_SIGNAL_OVERRIDES = {
         "rsi_min": 25,
         "rsi_max": 60
     },
-    # 365 days
-    #   XRP/USDT         25.32%     1.98    66.4%     2.58      110
-    #   XRP/USDT          2.46%     1.36    53.2%     1.74       18    -3.50%      66.7 (GOOD)        2/3 (66.7%)
-    # 1825 days
-    #   XRP/USDT         96.64%     0.77    70.8%     1.37      898
-    #   XRP/USDT          1.68%     1.13    66.4%    13.88       23    -6.10% 78.5 (EXCELLENT)      20/27 (74.1%)
+    # 1825 days - refine_symbol.py (1800 configs evaluadas)
+    # Split IS 2021-08→2025-02 / OOS 2025-02→2026-08 (OOS oculto durante la busqueda)
+    #   IS PF 1.56  |  OOS PF 3.07 (retencion 1.97)  |  WF stability 81.5 / 26 ventanas
+    #   FULL 86.45%  PF 1.75  WR 73.1%  DD -15.0%  405 trades
+    # Meseta: las 36 configs vecinas pasan todas (OOS PF 1.48-3.18). Muy estable.
+    # UNICO cambio vs config anterior: dip_threshold -0.055 -> -0.07.
+    # El resto (hold 28h, maxpos 4, TP 4%, SL 20%, RSI 25-60, mvm 0.60) lo confirmo la busqueda.
 
     # "XRP/USDT": {
     #     "dip_threshold": -0.055,
@@ -302,7 +435,8 @@ def get_symbol_signal_params(symbol: str, dip_threshold_override: float = None) 
         Dict with dip_threshold, use_volume_filter, use_rsi_filter,
         hold_timeout_hours, max_positions, take_profit_pct, stop_loss_pct,
         min_volume_mult, rsi_min, rsi_max, one_entry_per_dip_event,
-        dip_event_reset_pct, fail_fast_bars, fail_fast_min_rebound_pct
+        dip_event_reset_pct, fail_fast_bars, fail_fast_min_rebound_pct,
+        leverage
     """
     params = {
         "dip_threshold": DEFAULT_DIP_THRESHOLD,
@@ -319,6 +453,7 @@ def get_symbol_signal_params(symbol: str, dip_threshold_override: float = None) 
         "dip_event_reset_pct": DIP_EVENT_RESET_PCT,
         "fail_fast_bars": FAIL_FAST_BARS,
         "fail_fast_min_rebound_pct": FAIL_FAST_MIN_REBOUND_PCT,
+        "leverage": LEVERAGE,
     }
     params.update(SYMBOL_SIGNAL_OVERRIDES.get(symbol, {}))
 

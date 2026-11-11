@@ -25,8 +25,9 @@ import pandas as pd
 # regardless of the current working directory.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from breakout_momentum.data_loader import fetch_ohlcv
-from backtest import run_backtest
+from breakout_momentum.data_loader import fetch_ohlcv, fetch_funding_rates
+from backtest import run_backtest, liquidation_price_long
+from portfolio_backtest import run_portfolio_backtest
 from config import (
     DAYS,
     DEFAULT_SYMBOLS,
@@ -40,6 +41,12 @@ from config import (
     HOLD_TIMEOUT_HOURS,
     INITIAL_CAPITAL,
     LONG_ONLY,
+    SLIPPAGE_PCT,
+    USE_FUNDING,
+    FUNDING_INTERVAL_HOURS,
+    FUNDING_RATE_FALLBACK,
+    LEVERAGE,
+    MAINTENANCE_MARGIN_RATE,
     MAX_POSITIONS,
     MIN_VOLUME_MULT,
     ONE_ENTRY_PER_DIP_EVENT,
@@ -62,7 +69,7 @@ from main import _evaluate_buy_filters
 from strategy import add_dip_features, compute_exit_levels, generate_signals
 from walk_forward import walk_forward_validation
 
-SCHEMA_VERSION = "buy_the_dip.frontend.v1"
+SCHEMA_VERSION = "buy_the_dip.frontend.v2"
 STRATEGY_NAME = "buy_the_dip"
 SOURCE_NAME = "python"
 
@@ -146,6 +153,12 @@ def _build_config_snapshot() -> dict[str, Any]:
         "MAX_POSITIONS": MAX_POSITIONS,
         "INITIAL_CAPITAL": INITIAL_CAPITAL,
         "FEE_PCT": FEE_PCT,
+        "SLIPPAGE_PCT": SLIPPAGE_PCT,
+        "USE_FUNDING": USE_FUNDING,
+        "FUNDING_INTERVAL_HOURS": FUNDING_INTERVAL_HOURS,
+        "FUNDING_RATE_FALLBACK": FUNDING_RATE_FALLBACK,
+        "LEVERAGE": LEVERAGE,
+        "MAINTENANCE_MARGIN_RATE": MAINTENANCE_MARGIN_RATE,
         "MIN_VOLUME_MULT": MIN_VOLUME_MULT,
         "RSI_MIN": RSI_MIN,
         "RSI_MAX": RSI_MAX,
@@ -161,6 +174,41 @@ def _build_config_snapshot() -> dict[str, Any]:
         "WF_STEP_MONTHS": WF_STEP_MONTHS,
         "DEFAULT_SYMBOLS": DEFAULT_SYMBOLS,
         "SYMBOL_SIGNAL_OVERRIDES": SYMBOL_SIGNAL_OVERRIDES,
+    }
+
+
+def _build_futures_reality(
+    metrics: dict[str, Any],
+    last_close: float,
+    stop_loss_pct: float,
+    leverage: float,
+    sl_below_liquidation: bool,
+) -> dict[str, Any]:
+    """
+    Resumen de la realidad de futuros para la UI: retorno bruto vs neto,
+    desglose de costes (funding/slippage+fees), apalancamiento, precio de
+    liquidacion vs SL y alerta si el SL cae por debajo de liquidacion.
+
+    net_return es el total_return del backtest (ya neto de todos los costes).
+    gross_return_sum / net_return_sum son sumas de % por trade (desglose),
+    no el retorno compuesto; sirven para ver a donde se fue el dinero.
+    """
+    lev = leverage if leverage and leverage > 0 else 1.0
+    liq_price = liquidation_price_long(last_close, lev) if last_close else 0.0
+    sl_price = last_close * (1.0 - stop_loss_pct) if last_close else 0.0
+
+    return {
+        "leverage": lev,
+        "netReturnPct": _safe_float(metrics.get("total_return")) * 100,
+        "grossReturnSumPct": _safe_float(metrics.get("gross_return")) * 100,
+        "netReturnSumPct": _safe_float(metrics.get("net_return_sum")) * 100,
+        "fundingPaidPct": _safe_float(metrics.get("funding_paid_pct")) * 100,
+        "slippageFeesPct": _safe_float(metrics.get("slippage_paid_pct")) * 100,
+        "nLiquidations": int(_safe_float(metrics.get("n_liquidations"))),
+        "liquidationPrice": liq_price,
+        "stopLossPrice": sl_price,
+        "slBelowLiquidation": bool(sl_below_liquidation),
+        "lastClose": last_close,
     }
 
 
@@ -350,7 +398,7 @@ def _process_symbol(
     days: int,
     candle_cap: int,
     dip_threshold_override: float | None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     signal_params = get_symbol_signal_params(symbol, dip_threshold_override=dip_threshold_override)
 
     df = fetch_ohlcv(symbol, timeframe=timeframe, days=days)
@@ -367,6 +415,18 @@ def _process_symbol(
         dip_event_reset_pct=signal_params["dip_event_reset_pct"],
     )
 
+    # Funding real de Binance futures (opcional; degrada a fallback si no hay datos)
+    funding_series = None
+    if USE_FUNDING:
+        try:
+            funding_df = fetch_funding_rates(symbol, days=days)
+            if funding_df is not None and len(funding_df) > 0:
+                funding_series = funding_df.set_index("timestamp")["funding_rate"].sort_index()
+        except Exception as exc:
+            print(f"  funding unavailable for {symbol}: {exc}")
+
+    leverage = _safe_float(signal_params.get("leverage"), default=LEVERAGE) or LEVERAGE
+
     backtest = run_backtest(
         df,
         initial_capital=INITIAL_CAPITAL,
@@ -378,6 +438,9 @@ def _process_symbol(
         fee_pct=FEE_PCT,
         fail_fast_bars=signal_params["fail_fast_bars"],
         fail_fast_min_rebound_pct=signal_params["fail_fast_min_rebound_pct"],
+        slippage_pct=SLIPPAGE_PCT,
+        leverage=leverage,
+        funding_series=funding_series,
     )
 
     last = df.iloc[-1]
@@ -455,8 +518,16 @@ def _process_symbol(
             "dip_event_reset_pct": _safe_float(signal_params["dip_event_reset_pct"]),
             "fail_fast_bars": int(_safe_float(signal_params["fail_fast_bars"])) if signal_params["fail_fast_bars"] is not None else None,
             "fail_fast_min_rebound_pct": _safe_float(signal_params["fail_fast_min_rebound_pct"]),
+            "leverage": _safe_float(leverage, default=LEVERAGE),
         },
         "metrics": backtest.get("metrics", {}),
+        "futuresReality": _build_futures_reality(
+            backtest.get("metrics", {}),
+            last_close=_safe_float(last.get("close")),
+            stop_loss_pct=_safe_float(signal_params["stop_loss_pct"]),
+            leverage=_safe_float(leverage, default=LEVERAGE),
+            sl_below_liquidation=bool(backtest.get("sl_below_liquidation", False)),
+        ),
         "candles": [
             {
                 "timestamp": _to_iso(row.get("timestamp")),
@@ -477,7 +548,16 @@ def _process_symbol(
         "currentSignal": current_signal,
     }
 
-    return signals_item, symbol_backtest
+    # Contexto para el backtest de cartera (capital compartido): el df con señales,
+    # la serie de funding y los parametros resueltos del simbolo.
+    portfolio_ctx = {
+        "symbol": symbol,
+        "df": df[["timestamp", "high", "low", "close", "signal", "dip_size"]].copy(),
+        "funding_series": funding_series,
+        "signal_params": signal_params,
+    }
+
+    return signals_item, symbol_backtest, portfolio_ctx
 
 
 def _build_walkforward_symbol_result(
@@ -547,6 +627,110 @@ def _build_walkforward_symbol_result(
     }
 
 
+def _build_portfolio_artifact(
+    run_id: str,
+    generated_at: str,
+    portfolio_contexts: list[dict[str, Any]],
+    equity_cap: int = 2000,
+) -> dict[str, Any]:
+    """
+    Corre el backtest de cartera (capital compartido) y arma el artefacto JSON.
+    Devuelve status not_available si hay menos de 2 simbolos validos.
+    """
+    valid = [c for c in portfolio_contexts if c and c.get("df") is not None and len(c["df"]) > 0]
+    if len(valid) < 2:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "strategy": STRATEGY_NAME,
+            "source": SOURCE_NAME,
+            "runId": run_id,
+            "generatedAt": generated_at,
+            "status": "not_available",
+            "summary": "Cartera no disponible: se necesitan al menos 2 simbolos.",
+        }
+
+    symbol_frames = {c["symbol"]: c["df"] for c in valid}
+    symbol_params = {c["symbol"]: c["signal_params"] for c in valid}
+    funding_by_symbol = {
+        c["symbol"]: c["funding_series"] for c in valid if c.get("funding_series") is not None
+    }
+
+    result = run_portfolio_backtest(
+        symbol_frames=symbol_frames,
+        symbol_params=symbol_params,
+        funding_by_symbol=funding_by_symbol,
+        initial_capital=INITIAL_CAPITAL,
+        position_pct=POSITION_PCT,
+        max_positions=MAX_POSITIONS,
+        fee_pct=FEE_PCT,
+        slippage_pct=SLIPPAGE_PCT,
+    )
+
+    # Equity curve diezmada para no inflar el JSON (serie larga -> ~equity_cap puntos)
+    eq = result["equity_curve"]
+    eq_ts = result["equity_timestamps"]
+    n = len(eq)
+    stride = max(1, n // max(1, equity_cap))
+    equity_curve = [
+        {"timestamp": _to_iso(eq_ts[i]), "equity": _safe_float(eq[i])}
+        for i in range(0, n, stride)
+    ]
+    if n and (n - 1) % stride != 0:
+        equity_curve.append({"timestamp": _to_iso(eq_ts[-1]), "equity": _safe_float(eq[-1])})
+
+    m = result["metrics"]
+
+    # Comparativa: suma de retornos por-simbolo (modelo viejo, capital dedicado)
+    # vs retorno de cartera (capital compartido). Ilustra la "inflacion" del viejo.
+    sum_isolated = 0.0
+    for c in valid:
+        bt = run_backtest(
+            c["df"].assign(open=c["df"]["close"]),  # open no se usa en salidas, placeholder
+            initial_capital=INITIAL_CAPITAL,
+            stop_loss_pct=c["signal_params"]["stop_loss_pct"],
+            take_profit_pct=c["signal_params"]["take_profit_pct"],
+            hold_timeout=c["signal_params"]["hold_timeout_hours"],
+            max_positions=c["signal_params"]["max_positions"],
+            fee_pct=FEE_PCT,
+            slippage_pct=SLIPPAGE_PCT,
+            leverage=c["signal_params"].get("leverage"),
+            funding_series=c.get("funding_series"),
+        )
+        sum_isolated += _safe_float(bt["metrics"].get("total_return")) * 100
+
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "strategy": STRATEGY_NAME,
+        "source": SOURCE_NAME,
+        "runId": run_id,
+        "generatedAt": generated_at,
+        "status": "available",
+        "config": {
+            "initialCapital": INITIAL_CAPITAL,
+            "positionPct": POSITION_PCT * 100,
+            "maxPositions": MAX_POSITIONS,
+            "symbols": list(symbol_frames.keys()),
+        },
+        "metrics": {
+            "totalReturnPct": _safe_float(m.get("total_return")) * 100,
+            "sharpe": _safe_float(m.get("sharpe")),
+            "maxDrawdownPct": _safe_float(m.get("max_drawdown")) * 100,
+            "winRatePct": _safe_float(m.get("win_rate")) * 100,
+            "profitFactor": _safe_float(m.get("profit_factor")),
+            "totalTrades": int(_safe_float(m.get("total_trades"))),
+            "finalCapital": _safe_float(m.get("final_capital")),
+            "nLiquidations": int(_safe_float(m.get("n_liquidations"))),
+            "missedSignals": int(_safe_float(m.get("missed_signals"))),
+        },
+        "comparison": {
+            "sumIsolatedReturnPct": round(sum_isolated, 2),
+            "portfolioReturnPct": round(_safe_float(m.get("total_return")) * 100, 2),
+        },
+        "perSymbol": result["per_symbol"],
+        "equityCurve": equity_curve,
+    }
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -591,11 +775,12 @@ def main() -> None:
 
     signal_items: list[dict[str, Any]] = []
     backtest_results: list[dict[str, Any]] = []
+    portfolio_contexts: list[dict[str, Any]] = []
 
     for symbol in symbols:
         try:
             print(f"Processing {symbol}...")
-            signal_item, symbol_backtest = _process_symbol(
+            signal_item, symbol_backtest, portfolio_ctx = _process_symbol(
                 symbol=symbol,
                 timeframe=args.timeframe,
                 days=args.days,
@@ -604,6 +789,7 @@ def main() -> None:
             )
             signal_items.append(signal_item)
             backtest_results.append(symbol_backtest)
+            portfolio_contexts.append(portfolio_ctx)
             print(
                 f"  done: signal={signal_item['signal']} trades={symbol_backtest.get('metrics', {}).get('total_trades', 0)}"
             )
@@ -630,6 +816,28 @@ def main() -> None:
 
     print(f"\nWrote {signals_path}")
     print(f"Wrote {backtest_path}")
+
+    # ── Backtest de cartera (capital compartido) ──
+    try:
+        print("\nBuilding portfolio backtest (shared capital)...")
+        portfolio_payload = _build_portfolio_artifact(
+            run_id=run_id,
+            generated_at=generated_at,
+            portfolio_contexts=portfolio_contexts,
+        )
+        portfolio_path = out_dir / "portfolio.latest.json"
+        _write_json(portfolio_path, portfolio_payload)
+        print(f"Wrote {portfolio_path}")
+        if portfolio_payload.get("status") == "available":
+            pm = portfolio_payload["metrics"]
+            cmp = portfolio_payload["comparison"]
+            print(
+                f"  portfolio: ret={pm['totalReturnPct']:.1f}% "
+                f"maxDD={pm['maxDrawdownPct']:.1f}% missed={pm['missedSignals']} "
+                f"| sum-isolated={cmp['sumIsolatedReturnPct']:.1f}%"
+            )
+    except Exception as exc:
+        print(f"  portfolio error: {exc}")
 
     if args.include_walkforward:
         wf_results: list[dict[str, Any]] = []
