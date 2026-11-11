@@ -28,9 +28,6 @@ from config import (
     MAX_POSITIONS,
     FEE_PCT,
     INITIAL_CAPITAL,
-    MIN_VOLUME_MULT,
-    RSI_MIN,
-    RSI_MAX,
     get_symbol_signal_params,
 )
 from breakout_momentum.data_loader import fetch_ohlcv
@@ -45,6 +42,9 @@ def _evaluate_buy_filters(last: pd.Series, signal_params: dict) -> tuple[list[tu
     threshold = float(signal_params["dip_threshold"])
     use_vol = bool(signal_params["use_volume_filter"])
     use_rsi = bool(signal_params["use_rsi_filter"])
+    min_volume_mult = float(signal_params["min_volume_mult"])
+    rsi_min = float(signal_params["rsi_min"])
+    rsi_max = float(signal_params["rsi_max"])
 
     past_ret = last.get("past_return", float("nan"))
     rel_vol = last.get("relative_volume", float("nan"))
@@ -67,14 +67,14 @@ def _evaluate_buy_filters(last: pd.Series, signal_params: dict) -> tuple[list[tu
     )
 
     if use_vol:
-        vol_ok = pd.notna(rel_vol) and float(rel_vol) >= MIN_VOLUME_MULT
+        vol_ok = pd.notna(rel_vol) and float(rel_vol) >= min_volume_mult
         checks.append(
             (
                 "volume_filter",
                 bool(vol_ok),
                 (
                     f"relative_volume={float(rel_vol):.2f} "
-                    f">= min={MIN_VOLUME_MULT:.2f}"
+                    f">= min={min_volume_mult:.2f}"
                     if pd.notna(rel_vol)
                     else "relative_volume=NaN"
                 ),
@@ -84,13 +84,13 @@ def _evaluate_buy_filters(last: pd.Series, signal_params: dict) -> tuple[list[tu
         checks.append(("volume_filter", True, "disabled"))
 
     if use_rsi:
-        rsi_ok = pd.notna(rsi) and (RSI_MIN <= float(rsi) <= RSI_MAX)
+        rsi_ok = pd.notna(rsi) and (rsi_min <= float(rsi) <= rsi_max)
         checks.append(
             (
                 "rsi_filter",
                 bool(rsi_ok),
                 (
-                    f"rsi_14={float(rsi):.2f} in [{RSI_MIN}, {RSI_MAX}]"
+                    f"rsi_14={float(rsi):.2f} in [{rsi_min}, {rsi_max}]"
                     if pd.notna(rsi)
                     else "rsi_14=NaN"
                 ),
@@ -116,12 +116,15 @@ def print_current_signal(df: pd.DataFrame, symbol: str, threshold: float, signal
     checks, blocking = _evaluate_buy_filters(last, signal_params)
 
     if signal == "LONG":
-        levels = compute_exit_levels(last["close"], TAKE_PROFIT_PCT, STOP_LOSS_PCT)
+        take_profit_pct = float(signal_params["take_profit_pct"])
+        stop_loss_pct = float(signal_params["stop_loss_pct"])
+        levels = compute_exit_levels(last["close"], take_profit_pct, stop_loss_pct)
         print(f"  {symbol:<12} BUY SIGNAL!")
         print(f"               24h Drop: {past_ret:.2f}%")
         print(f"               Entry:    ${last['close']:,.4f}")
-        print(f"               TP:       ${levels['take_profit']:,.4f} (+{TAKE_PROFIT_PCT*100:.1f}%)")
-        print(f"               Timeout:  {HOLD_TIMEOUT_HOURS}h")
+        print(f"               TP:       ${levels['take_profit']:,.4f} (+{take_profit_pct*100:.1f}%)")
+        print(f"               SL:       ${levels['stop_loss']:,.4f} (-{stop_loss_pct*100:.1f}%)")
+        print(f"               Timeout:  {signal_params['hold_timeout_hours']}h")
     else:
         print(f"  {symbol:<12} NO SIGNAL  (24h: {past_ret:+.2f}%, need <{threshold*100:.0f}%)")
 
@@ -133,7 +136,7 @@ def print_current_signal(df: pd.DataFrame, symbol: str, threshold: float, signal
         print(f"               Blocked by: {blocking}")
 
 
-def _build_signal_payload(df: pd.DataFrame, symbol: str) -> dict | None:
+def _build_signal_payload(df: pd.DataFrame, symbol: str, signal_params: dict) -> dict | None:
     """Build a structured signal dict for machine consumption."""
     last = df.iloc[-1]
     signal = last.get("signal", "NO TRADE")
@@ -144,7 +147,9 @@ def _build_signal_payload(df: pd.DataFrame, symbol: str) -> dict | None:
     past_ret = last.get("past_return", 0) * 100
     rsi = last.get("rsi_14", 0)
     entry = float(last.get("close", 0))
-    levels = compute_exit_levels(entry, TAKE_PROFIT_PCT, STOP_LOSS_PCT)
+    take_profit_pct = float(signal_params["take_profit_pct"])
+    stop_loss_pct = float(signal_params["stop_loss_pct"])
+    levels = compute_exit_levels(entry, take_profit_pct, stop_loss_pct)
 
     extra = (
         f"Drop={past_ret:.2f}% RSI={rsi:.1f} "
@@ -196,8 +201,10 @@ def main_scan(
         print(f"  Dip threshold: {dip_threshold*100:.1f}% (global override)")
     else:
         print("  Dip threshold: per-symbol override")
-    print(f"  Take Profit:   {TAKE_PROFIT_PCT*100:.1f}%")
-    print(f"  Hold timeout:  {HOLD_TIMEOUT_HOURS}h")
+    print(f"  Take Profit:   per-symbol override (default {TAKE_PROFIT_PCT*100:.1f}%)")
+    print(f"  Stop Loss:     per-symbol override (default {STOP_LOSS_PCT*100:.1f}%)")
+    print(f"  Hold timeout:  per-symbol (default {HOLD_TIMEOUT_HOURS}h)")
+    print(f"  Max positions: per-symbol (default {MAX_POSITIONS})")
     print(f"  Fees:          {FEE_PCT:.2%} per side")
     print("=" * 70)
 
@@ -221,6 +228,11 @@ def main_scan(
                 dip_threshold=signal_params["dip_threshold"],
                 use_volume_filter=signal_params["use_volume_filter"],
                 use_rsi_filter=signal_params["use_rsi_filter"],
+                min_volume_mult=signal_params["min_volume_mult"],
+                rsi_min=signal_params["rsi_min"],
+                rsi_max=signal_params["rsi_max"],
+                one_entry_per_dip_event=signal_params["one_entry_per_dip_event"],
+                dip_event_reset_pct=signal_params["dip_event_reset_pct"],
             )
 
             n_signals = (df["signal"] == "LONG").sum()
@@ -229,16 +241,30 @@ def main_scan(
                 "  Config: "
                 f"th={signal_params['dip_threshold']*100:.1f}% "
                 f"RSI={'on' if signal_params['use_rsi_filter'] else 'off'} "
-                f"VOL={'on' if signal_params['use_volume_filter'] else 'off'}"
+                f"VOL={'on' if signal_params['use_volume_filter'] else 'off'} "
+                f"TP={signal_params['take_profit_pct']*100:.1f}% "
+                f"SL={signal_params['stop_loss_pct']*100:.1f}% "
+                f"HLD={signal_params['hold_timeout_hours']}h "
+                f"MAXP={signal_params['max_positions']} "
+                f"RVmin={signal_params['min_volume_mult']:.2f} "
+                f"RSI=[{signal_params['rsi_min']:.0f},{signal_params['rsi_max']:.0f}] "
+                f"OED={'on' if signal_params['one_entry_per_dip_event'] else 'off'} "
+                f"RST={signal_params['dip_event_reset_pct']*100:.1f}% "
+                f"FF={signal_params['fail_fast_bars'] if signal_params['fail_fast_bars'] is not None else '-'} "
+                f"FFmin={signal_params['fail_fast_min_rebound_pct']*100:.1f}%"
             )
 
             bt = run_backtest(
                 df,
                 initial_capital=INITIAL_CAPITAL,
-                stop_loss_pct=STOP_LOSS_PCT,
-                take_profit_pct=TAKE_PROFIT_PCT,
-                hold_timeout=HOLD_TIMEOUT_HOURS,
+                stop_loss_pct=signal_params["stop_loss_pct"],
+                take_profit_pct=signal_params["take_profit_pct"],
+                hold_timeout=signal_params["hold_timeout_hours"],
+                max_positions=signal_params["max_positions"],
                 fee_pct=FEE_PCT,
+                fail_fast_bars=signal_params["fail_fast_bars"],
+                fail_fast_min_rebound_pct=signal_params["fail_fast_min_rebound_pct"],
+                leverage=signal_params.get("leverage"),
             )
 
             m = bt["metrics"]
@@ -270,7 +296,7 @@ def main_scan(
     for symbol, data in results.items():
         threshold = data["signal_params"]["dip_threshold"]
         print_current_signal(data["df"], symbol, threshold, data["signal_params"])
-        sig = _build_signal_payload(data["df"], symbol)
+        sig = _build_signal_payload(data["df"], symbol, data["signal_params"])
         if sig:
             signals_payload.append(sig)
 

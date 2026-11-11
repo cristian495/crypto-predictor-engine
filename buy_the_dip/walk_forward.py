@@ -24,8 +24,6 @@ from config import (
     INITIAL_CAPITAL,
     FEE_PCT,
     STOP_LOSS_PCT,
-    TAKE_PROFIT_PCT,
-    HOLD_TIMEOUT_HOURS,
     WF_TRAIN_MONTHS,
     WF_TEST_MONTHS,
     WF_STEP_MONTHS,
@@ -74,7 +72,17 @@ def walk_forward_validation(
     print(
         "  Filters: "
         f"RSI={'on' if signal_params['use_rsi_filter'] else 'off'} "
-        f"VOL={'on' if signal_params['use_volume_filter'] else 'off'}"
+        f"VOL={'on' if signal_params['use_volume_filter'] else 'off'} "
+        f"TP={signal_params['take_profit_pct']*100:.1f}% "
+        f"SL={signal_params['stop_loss_pct']*100:.1f}% "
+        f"HLD={signal_params['hold_timeout_hours']}h "
+        f"MAXP={signal_params['max_positions']} "
+        f"RVmin={signal_params['min_volume_mult']:.2f} "
+        f"RSI=[{signal_params['rsi_min']:.0f},{signal_params['rsi_max']:.0f}] "
+        f"OED={'on' if signal_params['one_entry_per_dip_event'] else 'off'} "
+        f"RST={signal_params['dip_event_reset_pct']*100:.1f}% "
+        f"FF={signal_params['fail_fast_bars'] if signal_params['fail_fast_bars'] is not None else '-'} "
+        f"FFmin={signal_params['fail_fast_min_rebound_pct']*100:.1f}%"
     )
 
     # 1. Download data
@@ -122,6 +130,11 @@ def walk_forward_validation(
                 dip_threshold=threshold,
                 use_volume_filter=signal_params["use_volume_filter"],
                 use_rsi_filter=signal_params["use_rsi_filter"],
+                min_volume_mult=signal_params["min_volume_mult"],
+                rsi_min=signal_params["rsi_min"],
+                rsi_max=signal_params["rsi_max"],
+                one_entry_per_dip_event=signal_params["one_entry_per_dip_event"],
+                dip_event_reset_pct=signal_params["dip_event_reset_pct"],
             )
 
             # Count signals
@@ -138,10 +151,14 @@ def walk_forward_validation(
             backtest_results = run_backtest(
                 test_with_signals,
                 initial_capital=INITIAL_CAPITAL,
-                stop_loss_pct=STOP_LOSS_PCT,
-                take_profit_pct=TAKE_PROFIT_PCT,
-                hold_timeout=HOLD_TIMEOUT_HOURS,
+                stop_loss_pct=signal_params["stop_loss_pct"],
+                take_profit_pct=signal_params["take_profit_pct"],
+                hold_timeout=signal_params["hold_timeout_hours"],
+                max_positions=signal_params["max_positions"],
                 fee_pct=FEE_PCT,
+                fail_fast_bars=signal_params["fail_fast_bars"],
+                fail_fast_min_rebound_pct=signal_params["fail_fast_min_rebound_pct"],
+                leverage=signal_params.get("leverage"),
             )
 
             metrics = backtest_results["metrics"]
@@ -174,6 +191,101 @@ def walk_forward_validation(
 
     return results
 
+
+def _stability_label(score: float) -> str:
+    if score >= 70:
+        return "EXCELLENT"
+    if score >= 55:
+        return "GOOD"
+    if score >= 40:
+        return "MODERATE"
+    return "POOR"
+
+
+def _build_compact_wf_row(
+    symbol: str,
+    df_results: pd.DataFrame,
+    stability: float,
+    min_trades_for_pf: int = 5,
+) -> dict:
+    """Build compact metrics row for walk-forward output."""
+    windows = len(df_results)
+    positive_windows = int((df_results["total_return"] > 0).sum())
+    consistency_pct = (positive_windows / windows * 100) if windows else 0.0
+
+    enough_trades = df_results["num_trades"] >= min_trades_for_pf
+    pf_positive = int(((df_results["profit_factor"] > 1) & enough_trades).sum())
+
+    return {
+        "symbol": symbol,
+        "return": float(df_results["total_return"].mean()),
+        "sharpe": float(df_results["sharpe"].mean()),
+        "win_rate": float(df_results["win_rate"].mean()),
+        "profit_factor": float(df_results["profit_factor"].mean()),
+        "trades": float(df_results["num_trades"].mean()),
+        "max_dd": float(df_results["max_dd"].mean()),
+        "stability": float(stability),
+        "stability_label": _stability_label(float(stability)),
+        "positive_windows": positive_windows,
+        "pf_positive_windows": pf_positive,
+        "windows": windows,
+        "consistency_pct": consistency_pct,
+    }
+
+
+def _print_compact_wf_table(rows: list[dict], title: str):
+    """Print compact walk-forward table with robustness columns."""
+    if not rows:
+        return
+
+    print(f"\n  {title}")
+    print(
+        f"  {'Symbol':<12} {'Return':>10} {'Sharpe':>8} {'WR':>8} {'PF':>8} {'Trades':>8} "
+        f"{'MaxDD':>9} {'Stability':>16} {'Consistency':>18}"
+    )
+    print(f"  {'-'*114}")
+
+    total_return = 0.0
+    total_sharpe = 0.0
+    total_wr = 0.0
+    total_pf = 0.0
+    total_trades = 0.0
+    total_max_dd = 0.0
+    total_stability = 0.0
+    total_positive = 0
+    total_windows = 0
+
+    for row in rows:
+        consistency = f"{row['positive_windows']}/{row['windows']} ({row['consistency_pct']:.1f}%)"
+        stability_text = f"{row['stability']:.1f} ({row['stability_label']})"
+        print(
+            f"  {row['symbol']:<12} {row['return']:>9.2f}% {row['sharpe']:>8.2f} "
+            f"{row['win_rate']:>7.1f}% {row['profit_factor']:>8.2f} {int(round(row['trades'])):>8} "
+            f"{row['max_dd']:>8.2f}% {stability_text:>16} {consistency:>18}"
+        )
+
+        total_return += row['return']
+        total_sharpe += row['sharpe']
+        total_wr += row['win_rate']
+        total_pf += row['profit_factor']
+        total_trades += row['trades']
+        total_max_dd += row['max_dd']
+        total_stability += row['stability']
+        total_positive += row['positive_windows']
+        total_windows += row['windows']
+
+    n = len(rows)
+    avg_consistency_pct = (total_positive / total_windows * 100) if total_windows else 0.0
+    avg_consistency = f"{total_positive}/{total_windows} ({avg_consistency_pct:.1f}%)"
+    avg_stability = total_stability / n
+    avg_stability_text = f"{avg_stability:.1f} ({_stability_label(avg_stability)})"
+
+    print(f"  {'-'*114}")
+    print(
+        f"  {'AVERAGE':<12} {total_return/n:>9.2f}% {total_sharpe/n:>8.2f} "
+        f"{total_wr/n:>7.1f}% {total_pf/n:>8.2f} {int(round(total_trades/n)):>8} "
+        f"{total_max_dd/n:>8.2f}% {avg_stability_text:>16} {avg_consistency:>18}"
+    )
 
 def analyze_results(
     results: list,
@@ -234,6 +346,14 @@ def analyze_results(
 
     print(f"\n  STABILITY SCORE: {stability:.1f}/100")
 
+    compact_row = _build_compact_wf_row(
+        symbol,
+        df_results,
+        stability,
+        min_trades_for_pf=min_trades_for_pf,
+    )
+    _print_compact_wf_table([compact_row], "Compact View (mean + robustness)")
+
     if stability >= 70:
         print(f"     EXCELLENT - Strategy is robust")
     elif stability >= 55:
@@ -266,6 +386,7 @@ def run_multi_symbol(
     print(f"{'='*70}")
 
     all_scores = {}
+    compact_rows = []
 
     for symbol in symbols:
         try:
@@ -277,12 +398,21 @@ def run_multi_symbol(
                 total_days=total_days,
                 dip_threshold=dip_threshold,
             )
-            _, stability = analyze_results(
+            df_results, stability = analyze_results(
                 results,
                 symbol,
                 min_trades_for_pf=min_trades_for_pf,
             )
             all_scores[symbol] = stability
+            if df_results is not None and not df_results.empty:
+                compact_rows.append(
+                    _build_compact_wf_row(
+                        symbol,
+                        df_results,
+                        stability,
+                        min_trades_for_pf=min_trades_for_pf,
+                    )
+                )
         except Exception as e:
             print(f"\n  Error with {symbol}: {e}")
 
@@ -290,6 +420,8 @@ def run_multi_symbol(
     print(f"\n{'='*70}")
     print(f"  FINAL SUMMARY")
     print(f"{'='*70}\n")
+
+    _print_compact_wf_table(compact_rows, "WALK-FORWARD COMPACT VIEW (mean by windows)")
 
     for symbol, score in all_scores.items():
         status = (

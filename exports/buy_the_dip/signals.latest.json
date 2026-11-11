@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "buy_the_dip.frontend.v1",
+  "strategy": "buy_the_dip",
+  "source": "python",
+  "runId": "btd-444fd72a3004",
+  "generatedAt": "2026-08-07T19:07:04.266107+00:00",
+  "symbols": [
+    {
+      "symbol": "XRP/USDT",
+      "signal": "NO_SIGNAL",
+      "timestamp": "2026-08-07T19:00:00+00:00",
+      "close": 1.0197,
+      "past_return": -1.4972952086553137,
+      "dip_threshold": -5.5,
+      "rsi_14": 48.393574297188714,
+      "relative_volume": 0.06206162806201542,
+      "summary_text": "No trade: dip_threshold not satisfied",
+      "blocked_by": "dip_threshold (past_return=-1.50% < th=-5.50%)",
+      "entry_price": null,
+      "take_profit": null,
+      "stop_loss": null,
+      "conditions": [
+        {
+          "name": "dip_threshold",
+          "passed": false,
+          "detail": "past_return=-1.50% < th=-5.50%"
+        },
+        {
+          "name": "volume_filter",
+          "passed": false,
+          "detail": "relative_volume=0.06 >= min=0.60"
+        },
+        {
+          "name": "rsi_filter",
+          "passed": true,
+          "detail": "rsi_14=48.39 in [25.0, 60.0]"
+        }
+      ]
+    }
+  ]
+}

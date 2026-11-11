@@ -15,6 +15,10 @@ sys.path.insert(0, "..")
 from breakout_momentum.data_loader import fetch_ohlcv
 from backtest import run_backtest
 from config import (
+    ALLOW_COUNTERTREND_REVERSAL,
+    COUNTERTREND_MIN_DROP_1H,
+    COUNTERTREND_MIN_PULLBACK_PCT,
+    COUNTERTREND_RIP_LOOKBACK_HOURS,
     DAYS,
     FEE_PCT,
     INITIAL_CAPITAL,
@@ -144,6 +148,10 @@ def _walk_forward_for_config(
             use_volume_filter=params["use_volume_filter"],
             use_rsi_filter=params["use_rsi_filter"],
             use_trend_filter=params["use_trend_filter"],
+            allow_countertrend_reversal=ALLOW_COUNTERTREND_REVERSAL,
+            countertrend_rip_lookback_hours=COUNTERTREND_RIP_LOOKBACK_HOURS,
+            countertrend_min_drop_1h=COUNTERTREND_MIN_DROP_1H,
+            countertrend_min_pullback_pct=COUNTERTREND_MIN_PULLBACK_PCT,
             min_volume_mult=params["min_volume_mult"],
             rsi_min=params["rsi_min"],
             rsi_max=params["rsi_max"],
@@ -237,6 +245,10 @@ def _enrich_with_backtest_metrics(df_features: pd.DataFrame, params: dict) -> di
         use_volume_filter=params["use_volume_filter"],
         use_rsi_filter=params["use_rsi_filter"],
         use_trend_filter=params["use_trend_filter"],
+        allow_countertrend_reversal=ALLOW_COUNTERTREND_REVERSAL,
+        countertrend_rip_lookback_hours=COUNTERTREND_RIP_LOOKBACK_HOURS,
+        countertrend_min_drop_1h=COUNTERTREND_MIN_DROP_1H,
+        countertrend_min_pullback_pct=COUNTERTREND_MIN_PULLBACK_PCT,
         min_volume_mult=params["min_volume_mult"],
         rsi_min=params["rsi_min"],
         rsi_max=params["rsi_max"],

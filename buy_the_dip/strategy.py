@@ -27,6 +27,8 @@ from config import (
     RSI_MIN,
     RSI_MAX,
     USE_RSI_FILTER,
+    ONE_ENTRY_PER_DIP_EVENT,
+    DIP_EVENT_RESET_PCT,
 )
 
 
@@ -75,6 +77,11 @@ def generate_signals(
     dip_threshold: float = None,
     use_volume_filter: bool = USE_VOLUME_FILTER,
     use_rsi_filter: bool = USE_RSI_FILTER,
+    min_volume_mult: float = MIN_VOLUME_MULT,
+    rsi_min: float = RSI_MIN,
+    rsi_max: float = RSI_MAX,
+    one_entry_per_dip_event: bool = ONE_ENTRY_PER_DIP_EVENT,
+    dip_event_reset_pct: float = DIP_EVENT_RESET_PCT,
 ) -> pd.DataFrame:
     """
     Generate buy signals when dip conditions are met.
@@ -91,6 +98,11 @@ def generate_signals(
         dip_threshold: Override threshold (default from config)
         use_volume_filter: Apply volume filter
         use_rsi_filter: Apply RSI filter
+        min_volume_mult: Minimum relative volume when volume filter is active
+        rsi_min: Lower RSI bound when RSI filter is active
+        rsi_max: Upper RSI bound when RSI filter is active
+        one_entry_per_dip_event: If True, only one LONG per dip event
+        dip_event_reset_pct: Reset threshold to allow a new dip event
 
     Returns:
         DataFrame with signals
@@ -110,6 +122,9 @@ def generate_signals(
     df["signal_direction"] = 0
     df["dip_size"] = 0.0
 
+    # Stateful control to avoid stacking multiple entries in the same dip event
+    dip_event_consumed = False
+
     for idx in df.index:
         row = df.loc[idx]
 
@@ -121,23 +136,31 @@ def generate_signals(
         if pd.isna(past_ret):
             continue
 
+        if one_entry_per_dip_event and past_ret > dip_event_reset_pct:
+            dip_event_consumed = False
+
         # ── Core Rule: Big Dip ──────────────────────────────
         if past_ret < dip_threshold:
+            if one_entry_per_dip_event and dip_event_consumed:
+                continue
 
             # Optional: Volume filter
             if use_volume_filter:
-                if pd.isna(rel_vol) or rel_vol < MIN_VOLUME_MULT:
+                if pd.isna(rel_vol) or rel_vol < min_volume_mult:
                     continue
 
             # Optional: RSI filter
             if use_rsi_filter:
-                if pd.isna(rsi) or rsi < RSI_MIN or rsi > RSI_MAX:
+                if pd.isna(rsi) or rsi < rsi_min or rsi > rsi_max:
                     continue
 
             # Signal: BUY THE DIP
             df.loc[idx, "signal"] = "LONG"
             df.loc[idx, "signal_direction"] = 1
             df.loc[idx, "dip_size"] = past_ret
+
+            if one_entry_per_dip_event:
+                dip_event_consumed = True
 
     return df
 

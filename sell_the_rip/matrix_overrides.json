@@ -43,12 +43,16 @@
     "use_rsi_filter": true,
     "use_volume_filter": false,
     "use_trend_filter": true,
-    "rsi_min": 60.0,
-    "rsi_max": 85.0,
+    "allow_countertrend_reversal": true,
+    "countertrend_rip_lookback_hours": 10,
+    "countertrend_min_drop_1h": 0.018,
+    "countertrend_min_pullback_pct": 0.025,
+    "rsi_min": 65.0,
+    "rsi_max": 90.0,
     "min_volume_mult": 0.8,
     "take_profit_pct": 0.03,
-    "stop_loss_pct": 0.06,
-    "hold_timeout_hours": 36,
-    "score": 68.24
+    "stop_loss_pct": 0.055,
+    "hold_timeout_hours": 48,
+    "score": 71.86
   }
 }
