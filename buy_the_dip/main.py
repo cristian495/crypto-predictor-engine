@@ -31,7 +31,10 @@ from config import (
     get_symbol_signal_params,
 )
 from breakout_momentum.data_loader import fetch_ohlcv
-from strategy import add_dip_features, generate_signals, compute_exit_levels
+from strategy import (
+    add_dip_features, generate_signals, compute_exit_levels,
+    load_regime_if_enabled, apply_regime_filter,
+)
 from backtest import run_backtest
 
 STRATEGY_NAME = Path(__file__).resolve().parent.name
@@ -212,6 +215,9 @@ def main_scan(
     print(f"\n[1/3] Processing symbols...")
     results = {}
 
+    # Regimen de mercado (BTC vs SMA). Se calcula una vez; vacio si el filtro esta off.
+    regime = load_regime_if_enabled(fetch_ohlcv, days)
+
     for i, symbol in enumerate(symbols, 1):
         print(f"\n{'─' * 60}")
         print(f"[{i}/{len(symbols)}] {symbol}")
@@ -234,6 +240,7 @@ def main_scan(
                 one_entry_per_dip_event=signal_params["one_entry_per_dip_event"],
                 dip_event_reset_pct=signal_params["dip_event_reset_pct"],
             )
+            df = apply_regime_filter(df, regime)
 
             n_signals = (df["signal"] == "LONG").sum()
             print(f"  Signals: {n_signals}")

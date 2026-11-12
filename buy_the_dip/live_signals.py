@@ -34,17 +34,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import TIMEFRAME, DEFAULT_SYMBOLS, get_symbol_signal_params
 from breakout_momentum.data_loader import fetch_ohlcv
-from strategy import add_dip_features, generate_signals, compute_exit_levels
+from strategy import (
+    add_dip_features, generate_signals, compute_exit_levels,
+    load_regime_if_enabled, apply_regime_filter,
+)
 from main import _evaluate_buy_filters
 
 # Suficientes velas para calcular features (rolling 24h + RSI 14 + vol 20) con margen.
 LOOKBACK_DAYS = 10
 
 
-def _detect_signal(symbol: str) -> dict | None:
+def _detect_signal(symbol: str, regime=None) -> dict | None:
     """
     Evalua la ULTIMA vela de un simbolo. Devuelve un dict de señal si es LONG,
     o un dict con signal=NO_SIGNAL y el motivo de bloqueo (para registro).
+    Aplica el filtro de regimen si `regime` viene dado.
     """
     signal_params = get_symbol_signal_params(symbol)
 
@@ -61,6 +65,7 @@ def _detect_signal(symbol: str) -> dict | None:
         one_entry_per_dip_event=signal_params["one_entry_per_dip_event"],
         dip_event_reset_pct=signal_params["dip_event_reset_pct"],
     )
+    df = apply_regime_filter(df, regime)
 
     last = df.iloc[-1]
     is_long = last.get("signal", "NO TRADE") == "LONG"
@@ -176,13 +181,19 @@ def run(symbols: list[str], log_path: Path, dry_run: bool, no_alert: bool) -> in
     print(f"{'=' * 64}")
     print(f"  Symbols: {len(symbols)}  |  log: {log_path}")
     print(f"  Mode:    {'DRY-RUN' if dry_run else 'LIVE'}  |  alerts: {'on' if alert_enabled else 'off'}")
+
+    # Regimen de mercado (BTC vs SMA): una sola descarga para todos los simbolos.
+    regime = load_regime_if_enabled(fetch_ohlcv, LOOKBACK_DAYS)
+    if len(regime):
+        bullish_now = bool(regime.iloc[-1]) if len(regime) else True
+        print(f"  Regimen: {'ALCISTA/lateral (opera)' if bullish_now else 'BAJISTA (bloquea LONG)'}")
     print(f"{'=' * 64}")
 
     n_long = 0
     n_new = 0
     for symbol in symbols:
         try:
-            sig = _detect_signal(symbol)
+            sig = _detect_signal(symbol, regime=regime)
         except Exception as e:
             print(f"  {symbol:<10} ERROR: {e}")
             continue

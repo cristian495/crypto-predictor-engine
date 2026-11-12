@@ -66,7 +66,10 @@ from config import (
     get_symbol_signal_params,
 )
 from main import _evaluate_buy_filters
-from strategy import add_dip_features, compute_exit_levels, generate_signals
+from strategy import (
+    add_dip_features, compute_exit_levels, generate_signals,
+    load_regime_if_enabled, apply_regime_filter,
+)
 from walk_forward import walk_forward_validation
 
 SCHEMA_VERSION = "buy_the_dip.frontend.v2"
@@ -398,6 +401,7 @@ def _process_symbol(
     days: int,
     candle_cap: int,
     dip_threshold_override: float | None,
+    regime=None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     signal_params = get_symbol_signal_params(symbol, dip_threshold_override=dip_threshold_override)
 
@@ -414,6 +418,7 @@ def _process_symbol(
         one_entry_per_dip_event=signal_params["one_entry_per_dip_event"],
         dip_event_reset_pct=signal_params["dip_event_reset_pct"],
     )
+    df = apply_regime_filter(df, regime)
 
     # Funding real de Binance futures (opcional; degrada a fallback si no hay datos)
     funding_series = None
@@ -777,6 +782,9 @@ def main() -> None:
     backtest_results: list[dict[str, Any]] = []
     portfolio_contexts: list[dict[str, Any]] = []
 
+    # Regimen de mercado (BTC vs SMA), calculado una vez; vacio si el filtro esta off.
+    regime = load_regime_if_enabled(fetch_ohlcv, args.days)
+
     for symbol in symbols:
         try:
             print(f"Processing {symbol}...")
@@ -786,6 +794,7 @@ def main() -> None:
                 days=args.days,
                 candle_cap=args.candle_cap,
                 dip_threshold_override=args.threshold,
+                regime=regime,
             )
             signal_items.append(signal_item)
             backtest_results.append(symbol_backtest)

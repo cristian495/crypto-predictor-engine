@@ -165,6 +165,71 @@ def generate_signals(
     return df
 
 
+def compute_regime_series(
+    fetch_ohlcv_fn,
+    symbol: str = "BTC/USDT",
+    sma: int = 110,
+    timeframe: str = "1d",
+    days: int = 365,
+) -> pd.Series:
+    """
+    Serie booleana indexada por timestamp: True = regimen alcista/lateral (close > SMA).
+
+    Se le pasa `fetch_ohlcv_fn` por inyeccion para no acoplar strategy.py al data_loader
+    (lo usan main/export/live con su propia funcion de fetch).
+
+    Validado walk-forward (ver config USE_REGIME_FILTER). Si no hay datos suficientes,
+    devuelve serie vacia (el filtro no bloqueara nada -> degradacion segura).
+    """
+    try:
+        btc = fetch_ohlcv_fn(symbol, timeframe=timeframe, days=days)
+        btc = btc.set_index("timestamp").sort_index()
+        btc["sma"] = btc["close"].rolling(sma).mean()
+        return (btc["close"] > btc["sma"]).rename("bullish")
+    except Exception:
+        return pd.Series(dtype=bool)
+
+
+def load_regime_if_enabled(fetch_ohlcv_fn, days: int) -> pd.Series:
+    """
+    Devuelve la serie de regimen segun la config (vacia si USE_REGIME_FILTER=False).
+    Helper para que scan/export/live la obtengan con una sola linea y datos suficientes
+    (necesita margen para la SMA: dias + SMA*timeframe).
+    """
+    from config import (
+        USE_REGIME_FILTER, REGIME_SYMBOL, REGIME_SMA, REGIME_TIMEFRAME,
+    )
+    if not USE_REGIME_FILTER:
+        return pd.Series(dtype=bool)
+    # Margen extra para que la SMA tenga ventana completa al inicio del periodo.
+    extra = REGIME_SMA + 30 if REGIME_TIMEFRAME.endswith("d") else 30
+    return compute_regime_series(
+        fetch_ohlcv_fn, symbol=REGIME_SYMBOL, sma=REGIME_SMA,
+        timeframe=REGIME_TIMEFRAME, days=days + extra,
+    )
+
+
+def apply_regime_filter(df: pd.DataFrame, regime: pd.Series) -> pd.DataFrame:
+    """
+    Anula (NO TRADE) las señales LONG que caen en regimen bajista (BTC bajo su SMA).
+    Alinea el regimen (normalmente diario) a los timestamps de las velas (forward fill).
+    Si la serie de regimen esta vacia, devuelve df sin cambios (no bloquea nada).
+    """
+    if regime is None or len(regime) == 0 or "signal" not in df.columns:
+        return df
+
+    d = df.copy()
+    ts = pd.DatetimeIndex(d["timestamp"])
+    aligned = regime.reindex(regime.index.union(ts)).sort_index().ffill().reindex(ts)
+    mask_bear = (aligned.values == False)  # noqa: E712
+    is_long = d["signal"].values == "LONG"
+    block = is_long & mask_bear
+    d.loc[block, "signal"] = "NO TRADE"
+    if "signal_direction" in d.columns:
+        d.loc[block, "signal_direction"] = 0
+    return d
+
+
 def compute_exit_levels(
     entry_price: float,
     take_profit_pct: float = TAKE_PROFIT_PCT,

@@ -157,6 +157,19 @@ USE_BTC_FILTER = False          # Don't require BTC alignment
 # ── Trading Mode ────────────────────────────────────────────
 LONG_ONLY = True                # Buy the dip = LONG only
 
+# ── Market Regime Filter ────────────────────────────────────
+# Buy_the_dip es LONG-only y sufre en tendencia bajista. Este filtro ANULA las
+# señales que ocurren cuando el mercado global (BTC) esta bajo su SMA larga.
+# Validado walk-forward 2026-11-11: mejora el drawdown de cartera en 5/7 ventanas
+# (-58% -> -42% full), brilla en periodos malos (2025-05 DD -51%->-16%, Sharpe 0.23->2.07),
+# y NO daña en alcistas (BTC siempre sobre SMA -> no bloquea nada). OJO: habra periodos
+# enteros sin operar cuando BTC este bajo la SMA (ej. 2025-11->2026-05 bloqueo todo).
+# SMA en meseta robusta 100-120; se usa 110 (centro).
+USE_REGIME_FILTER = True
+REGIME_SYMBOL = "BTC/USDT"
+REGIME_SMA = 110                # periodo de la SMA del simbolo de regimen
+REGIME_TIMEFRAME = "1d"         # timeframe del regimen (1d = diario)
+
 # ── Per-Symbol Overrides ────────────────────────────────────
 # These values come from matrix tests (matrix_runs/*_matrix.csv).
 # Optional extra keys per symbol:
