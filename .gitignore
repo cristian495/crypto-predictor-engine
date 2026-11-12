@@ -51,3 +51,8 @@ live_summary.json
 **/live_signals.jsonl
 **/live_results.jsonl
 **/live_summary.json
+
+# Reportes/artefactos generados (no son codigo, se regeneran corriendo los scripts)
+**/matrix_runs/
+**/exports/
+**/opt_cache/
